@@ -1711,6 +1711,49 @@ ul { margin: 0; padding: 0; list-style: none; }
 
 .board-panel { max-width: 580px; }
 
+/* --- Compartir tablero --- */
+
+.share-panel { max-width: 560px; }
+
+.share-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.share-row .input { flex: 1; min-width: 0; }
+.share-row .btn-primary { flex: 0 0 auto; padding: 0 16px; }
+
+textarea.input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.share-note {
+  margin: 0 0 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.share-note strong { color: var(--text); }
+
+.share-warn {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fff3c4;
+  color: #7f5f01;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.share-warn code {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
 .field { display: block; margin-bottom: 18px; }
 .field > span {
   display: block;

@@ -70,6 +70,35 @@ local en archivos `file://`. Para que la persistencia funcione siempre, usa el s
 5. Arrastra tarjetas entre listas para moverlas y usa **Filtros** para ver solo lo que necesitas.
 6. Crea tus propias etiquetas desde el botón **Etiquetas** de la barra superior.
 
+## Colaboración en línea (compartir el tablero)
+
+Puedes compartir un tablero para que **otra persona lo vea y escriba en él desde otro lugar**, en tiempo
+real. Se configura **una sola vez** con una base de datos gratuita de Firebase (sin tarjeta de crédito).
+
+1. Entra en <https://console.firebase.google.com> con tu cuenta de Google y pulsa **Crear proyecto**.
+   Ponle un nombre (por ejemplo `planboard`) y crea el proyecto (puedes desactivar Google Analytics).
+2. En el menú lateral, abre **Compilación → Realtime Database** y pulsa **Crear base de datos**. Elige
+   una ubicación y empieza en **modo de prueba**.
+3. Abre la pestaña **Reglas**, pega esto y pulsa **Publicar**:
+
+   ```json
+   { "rules": { "boards": { ".read": true, ".write": true } } }
+   ```
+
+4. Ve a **Configuración del proyecto** (el engranaje) → **Tus apps** → icono **Web `</>`** → registra la
+   app y copia el objeto de configuración (o solo la línea `databaseURL`).
+5. En Planboard pulsa **Compartir**, pega ahí esa configuración y pulsa **Guardar y activar**.
+6. Copia el enlace que aparece y envíalo por WhatsApp o correo. Quien lo abra verá **tus** actividades y
+   podrá **redactar y editar** en ellas al instante. El enlace ya lleva la conexión incluida, así que tu
+   compañero **no tiene que configurar nada**.
+
+> **Privacidad:** con las reglas de arriba, cualquiera que tenga la URL de tu base de datos podría
+> escribir en ella. El enlace compartido usa un identificador aleatorio largo (`#b=…`) que hace muy
+> difícil adivinarlo; aun así, compártelo solo con las personas que deban editar el tablero. Puedes
+> revocar el acceso cambiando las reglas o la base de datos cuando quieras.
+
+Sin configurar Firebase, la app funciona igual pero guarda todo **solo en el navegador de cada persona**.
+
 ## Atajos
 
 - `Esc`: cierra el modal, el menú o el panel de filtros abierto.
@@ -89,7 +118,8 @@ local en archivos `file://`. Para que la persistencia funcione siempre, usa el s
 
 ## Datos y respaldo
 
-Todo se guarda en el navegador (`localStorage`), no en un servidor. Usa **Exportar** en la barra
+Por defecto todo se guarda en el navegador (`localStorage`). Si activas la **colaboración** (ver arriba),
+el tablero compartido se sincroniza además con tu base de datos de Firebase. Usa **Exportar** en la barra
 lateral para descargar un `.json` con todos los tableros y **Importar** para restaurarlo. **Reiniciar**
 deja el tablero de nuevo en blanco con sus secciones vacías.
 

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#0c66e4">
 <title>Planboard · Tableros de actividades</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230c66e4'/%3E%3Crect x='12' y='14' width='12' height='36' rx='3' fill='white'/%3E%3Crect x='27' y='14' width='12' height='26' rx='3' fill='%23a5c9ff'/%3E%3Crect x='42' y='14' width='12' height='18' rx='3' fill='white' opacity='.7'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
 <div id="app" class="app">
@@ -118,6 +118,9 @@
 
           <div class="board-header-right">
             <div class="board-progress" id="boardProgress"></div>
+            <button id="btnShare" class="board-chip" title="Compartir tablero" aria-label="Compartir tablero">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>
+            </button>
             <button id="btnBoardMenu" class="board-chip" title="Ajustes del tablero" aria-label="Ajustes del tablero">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
             </button>
@@ -307,8 +310,27 @@
   </div>
 </div>
 
+<!-- ============ Compartir tablero ============ -->
+<div id="shareModal" class="modal hidden">
+  <div class="modal-backdrop" data-close="shareModal"></div>
+  <div class="modal-panel share-panel" role="dialog" aria-modal="true" aria-label="Compartir tablero">
+    <div class="modal-head">
+      <div>
+        <h2>Compartir tablero</h2>
+        <p class="muted">Quien tenga este enlace podrá ver y editar el tablero en tiempo real.</p>
+      </div>
+      <button class="modal-x inline" data-close="shareModal" aria-label="Cerrar">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="shareBody"></div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script src="app.js?v=10"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

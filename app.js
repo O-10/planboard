@@ -9,6 +9,29 @@
   const STORAGE_KEY = "planboard.state.v1";
   const ACTIVE_KEY = "planboard.activeBoard.v1";
 
+  /* ============================================================
+     Colaboración en línea (Firebase Realtime Database)
+     ------------------------------------------------------------
+     OPCIONAL. Normalmente no hace falta tocar nada aquí: en la
+     app, pulsa "Compartir" y pega ahí tu configuración de
+     Firebase (o solo la databaseURL). Se guarda en este
+     navegador y el enlace compartido la lleva incluida.
+
+     Si prefieres fijarla en el código, rellena estos valores con
+     los de TU proyecto (Consola de Firebase > Configuración del
+     proyecto > Tus apps > Configuración del SDK).
+     ============================================================ */
+  const FIREBASE_CONFIG = {
+    apiKey: "REEMPLAZA_API_KEY",
+    authDomain: "REEMPLAZA.firebaseapp.com",
+    databaseURL: "https://REEMPLAZA-default-rtdb.firebaseio.com",
+    projectId: "REEMPLAZA",
+    storageBucket: "REEMPLAZA.appspot.com",
+    messagingSenderId: "REEMPLAZA",
+    appId: "REEMPLAZA"
+  };
+  const SHARE_PARAM = "b";
+
   const STATUSES = {
     planificada: { label: "Planificada", dot: "#8590a2", pill: "#e9edf2", text: "#44546f" },
     en_proceso: { label: "En proceso", dot: "#e2b203", pill: "#fff3c4", text: "#7f5f01" },
@@ -326,6 +349,7 @@
       console.warn("No se pudo guardar el estado:", err);
       notifyStorageError();
     }
+    scheduleCloudPush();
   }
 
   /* Pequeña confirmación visual de que los cambios se han guardado. */
@@ -340,6 +364,338 @@
       el.classList.remove("is-saved");
       el.textContent = "Los cambios se guardan automáticamente";
     }, 1400);
+  }
+
+  /* ---------- Colaboración en línea (Firebase) ---------- */
+
+  const CLOUD_KEY = "planboard.firebase.v1";
+
+  function b64urlEncode(str) {
+    return btoa(unescape(encodeURIComponent(str)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  }
+
+  function b64urlDecode(str) {
+    let s = String(str).replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    return decodeURIComponent(escape(atob(s)));
+  }
+
+  /* Acepta un objeto de configuración de Firebase, su JSON como texto,
+     o directamente la URL de la base de datos. */
+  function normalizeCloudConfig(input) {
+    if (!input) return null;
+    if (typeof input === "string") {
+      const text = input.trim();
+      if (!text) return null;
+      if (/^https?:\/\//i.test(text)) return { databaseURL: text };
+      try {
+        return normalizeCloudConfig(JSON.parse(text));
+      } catch (err) {
+        return null;
+      }
+    }
+    if (typeof input !== "object") return null;
+    const url = String(
+      input.databaseURL || input.databaseUrl || input.database_url || ""
+    ).trim();
+    if (!url || !/^https?:\/\//i.test(url)) return null;
+    return {
+      apiKey: input.apiKey,
+      authDomain: input.authDomain,
+      databaseURL: url,
+      projectId: input.projectId,
+      storageBucket: input.storageBucket,
+      messagingSenderId: input.messagingSenderId,
+      appId: input.appId
+    };
+  }
+
+  function cloudConfig() {
+    /* 1) Configuración fijada en el código (opcional). */
+    if (
+      FIREBASE_CONFIG &&
+      FIREBASE_CONFIG.databaseURL &&
+      !/REEMPLAZA/.test(FIREBASE_CONFIG.databaseURL)
+    ) {
+      return normalizeCloudConfig(FIREBASE_CONFIG);
+    }
+    /* 2) Configuración guardada en este navegador. */
+    try {
+      const raw = localStorage.getItem(CLOUD_KEY);
+      if (raw) {
+        const cfg = normalizeCloudConfig(JSON.parse(raw));
+        if (cfg) return cfg;
+      }
+    } catch (err) { /* ignore */ }
+    return null;
+  }
+
+  function saveCloudConfig(cfg) {
+    try {
+      if (cfg) localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg));
+      else localStorage.removeItem(CLOUD_KEY);
+    } catch (err) { /* ignore */ }
+  }
+
+  function firebaseConfigured() {
+    return !!cloudConfig();
+  }
+
+  function resetCloudState() {
+    if (cloud.ref) {
+      try { cloud.ref.off(); } catch (err) { /* ignore */ }
+    }
+    cloud.ready = false;
+    cloud.db = null;
+    cloud.shareId = null;
+    cloud.ref = null;
+  }
+
+  function initCloud() {
+    if (cloud.ready) return true;
+    const cfg = cloudConfig();
+    if (!cfg) return false;
+    if (typeof firebase === "undefined") {
+      console.warn("El SDK de Firebase no se ha cargado.");
+      return false;
+    }
+    try {
+      if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(cfg);
+      cloud.db = firebase.database();
+      cloud.ready = true;
+      return true;
+    } catch (err) {
+      console.warn("No se pudo iniciar Firebase:", err);
+      cloud.ready = false;
+      return false;
+    }
+  }
+
+  function randomShareId() {
+    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let s = "";
+    for (let i = 0; i < 22; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  }
+
+  function hashParams() {
+    return new URLSearchParams(location.hash.replace(/^#/, ""));
+  }
+
+  function shareUrlFor(shareId) {
+    const params = new URLSearchParams();
+    params.set(SHARE_PARAM, shareId);
+    /* El enlace lleva la conexión para que quien lo abra no configure nada. */
+    const cfg = cloudConfig();
+    if (cfg && cfg.databaseURL) params.set("c", b64urlEncode(JSON.stringify(cfg)));
+    return location.origin + location.pathname + "#" + params.toString();
+  }
+
+  function readShareIdFromUrl() {
+    const fromHash = hashParams().get(SHARE_PARAM);
+    if (fromHash) return fromHash;
+    return new URLSearchParams(location.search).get(SHARE_PARAM);
+  }
+
+  function applyCloudFromUrl() {
+    const raw =
+      hashParams().get("c") || new URLSearchParams(location.search).get("c");
+    if (!raw) return;
+    try {
+      const cfg = normalizeCloudConfig(JSON.parse(b64urlDecode(raw)));
+      if (cfg) saveCloudConfig(cfg);
+    } catch (err) { /* ignore */ }
+  }
+
+  function boardForShare(shareId) {
+    return state.boards.find((b) => b.shareId === shareId) || null;
+  }
+
+  function scheduleCloudPush() {
+    if (!cloud.ready || !cloud.shareId || cloud.applyingRemote) return;
+    clearTimeout(cloud.pushTimer);
+    cloud.pushTimer = setTimeout(pushCloudNow, 500);
+  }
+
+  function pushCloudNow() {
+    if (!cloud.ready || !cloud.shareId || cloud.applyingRemote) return;
+    const board = boardForShare(cloud.shareId) || currentBoard();
+    if (!board) return;
+    board.shareId = cloud.shareId;
+    const payload = {
+      board: JSON.parse(JSON.stringify(board)),
+      updatedAt: Date.now()
+    };
+    const ref = cloud.ref || cloud.db.ref("boards/" + cloud.shareId);
+    ref.set(payload).catch((err) => {
+      console.warn("No se pudo sincronizar con la nube:", err);
+      toast("No se pudo sincronizar (revisa tu conexión)");
+    });
+  }
+
+  function applyRemoteBoard(remoteBoard) {
+    const normalized = normalizeState({ boards: [remoteBoard] });
+    if (!normalized || !normalized.boards.length) return;
+    const board = normalized.boards[0];
+    board.shareId = cloud.shareId;
+
+    cloud.applyingRemote = true;
+    const index = state.boards.findIndex(
+      (b) => b.shareId === cloud.shareId || b.id === board.id
+    );
+    if (index >= 0) state.boards[index] = board;
+    else state.boards.push(board);
+    ui.boardId = board.id;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(ACTIVE_KEY, board.id);
+    } catch (err) { /* ignore */ }
+    render();
+    if (!$("#shareModal").classList.contains("hidden")) renderShareBody(cloud.shareId);
+    cloud.applyingRemote = false;
+  }
+
+  function connectSharedBoard(shareId, opts) {
+    const o = opts || {};
+    if (!initCloud()) {
+      if (!o.silent) toast("La colaboración aún no está configurada");
+      return false;
+    }
+    if (cloud.shareId === shareId && cloud.ref) return true;
+    if (cloud.ref) cloud.ref.off();
+    cloud.shareId = shareId;
+    cloud.ref = cloud.db.ref("boards/" + shareId);
+    cloud.ref.on(
+      "value",
+      (snap) => {
+        const val = snap.val();
+        if (!val || !val.board) {
+          if (o.firstConnect) {
+            /* El tablero todavía no existe en la nube: lo subimos nosotros. */
+            pushCloudNow();
+            toast("Tablero compartido creado");
+          }
+          return;
+        }
+        applyRemoteBoard(val.board);
+      },
+      (err) => {
+        console.warn("Error de sincronización:", err);
+        toast("Error de conexión con el tablero compartido");
+      }
+    );
+    return true;
+  }
+
+  function shareBoard() {
+    const board = currentBoard();
+    if (!board) {
+      toast("Crea un tablero primero");
+      return;
+    }
+    if (!firebaseConfigured()) {
+      renderShareBody(null);
+      showModal("shareModal");
+      return;
+    }
+    if (!board.shareId) board.shareId = randomShareId();
+    saveState();
+    const first = !cloud.ready || cloud.shareId !== board.shareId;
+    connectSharedBoard(board.shareId, { firstConnect: first });
+    renderShareBody(board.shareId);
+    showModal("shareModal");
+  }
+
+  function saveFbConfigFromInput() {
+    const el = $("#fbConfig");
+    const cfg = normalizeCloudConfig(el ? el.value : "");
+    if (!cfg) {
+      toast("No se reconoce la configuración. Revisa el texto pegado.");
+      return;
+    }
+    saveCloudConfig(cfg);
+    const activate = () => {
+      resetCloudState();
+      toast("Colaboración activada");
+      shareBoard();
+    };
+    if (typeof firebase !== "undefined" && firebase.apps && firebase.apps.length) {
+      /* Si ya había una app iniciada, la reiniciamos con la nueva configuración. */
+      try {
+        firebase.app().delete().then(activate, activate);
+      } catch (err) {
+        activate();
+      }
+    } else {
+      activate();
+    }
+  }
+
+  function resetFbConfig() {
+    saveCloudConfig(null);
+    resetCloudState();
+    renderShareBody(null);
+    toast("Conexión borrada. Puedes pegar otra.");
+  }
+
+  function renderShareBody(shareId) {
+    const body = $("#shareBody");
+    if (!body) return;
+
+    if (!firebaseConfigured()) {
+      body.innerHTML =
+        '<p class="share-warn">Para compartir en línea necesitas una base de datos ' +
+        "<strong>gratuita</strong> de Firebase. Se configura <strong>una sola vez</strong>.</p>" +
+        '<label class="field"><span>Pega aquí la configuración de Firebase</span>' +
+          '<textarea id="fbConfig" class="input" rows="4" spellcheck="false" ' +
+          "placeholder='{\"databaseURL\":\"https://tu-proyecto-default-rtdb.firebaseio.com\"}'></textarea>" +
+        "</label>" +
+        '<p class="share-note">Puedes pegar el <strong>objeto completo</strong> de configuración ' +
+        "(Configuración del proyecto → Tus apps → Configuración del SDK) o solo la " +
+        "<strong>URL de la base de datos</strong>. Encontrarás los pasos en el README.</p>" +
+        '<div class="modal-actions">' +
+          '<button class="btn-ghost" data-close="shareModal" type="button">Cerrar</button>' +
+          '<button class="btn-primary" id="btnSaveFbConfig" type="button">Guardar y activar</button>' +
+        "</div>";
+      return;
+    }
+
+    const url = shareUrlFor(shareId);
+    body.innerHTML =
+      '<label class="field"><span>Enlace para compartir</span>' +
+        '<div class="share-row">' +
+          '<input id="shareLink" class="input" type="text" readonly value="' + url + '">' +
+          '<button class="btn-primary" id="btnCopyShare" type="button">Copiar</button>' +
+        "</div>" +
+      "</label>" +
+      '<p class="share-note">Cualquier persona con este enlace podrá <strong>ver y editar</strong> este ' +
+      "tablero en tiempo real, aunque esté en otra ciudad. El enlace ya incluye la conexión, así que tu " +
+      "compañero no tiene que configurar nada.</p>" +
+      '<div class="modal-actions">' +
+        '<button class="btn-ghost" id="btnResetFbConfig" type="button">Cambiar base de datos</button>' +
+        '<button class="btn-ghost" data-close="shareModal" type="button">Cerrar</button>' +
+      "</div>";
+  }
+
+  function copyShareLink() {
+    const input = $("#shareLink");
+    if (!input) return;
+    const text = input.value;
+    const done = () => toast("Enlace copiado");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => {
+        input.select();
+        document.execCommand("copy");
+        done();
+      });
+    } else {
+      input.select();
+      document.execCommand("copy");
+      done();
+    }
   }
 
   function seedState() {
@@ -391,6 +747,16 @@
 
   let dragState = null;
   let toastTimer = null;
+
+  /* Estado de la sincronización en la nube. */
+  const cloud = {
+    ready: false,
+    db: null,
+    shareId: null,
+    ref: null,
+    applyingRemote: false,
+    pushTimer: null
+  };
 
   /* ---------- Selectores ---------- */
 
@@ -1495,6 +1861,7 @@
     $("#btnNewBoard").addEventListener("click", () => openBoardModal("new"));
     $("#btnEmptyCreate").addEventListener("click", () => openBoardModal("new"));
     $("#btnBoardMenu").addEventListener("click", () => openBoardModal("edit"));
+    $("#btnShare").addEventListener("click", shareBoard);
 
     $("#btnToggleSidebar").addEventListener("click", () => setSidebar(!ui.sidebarOpen));
     $("#scrim").addEventListener("click", () => setSidebar(false));
@@ -1902,6 +2269,21 @@
         if (editForm) saveCardEdit(editForm);
       }
 
+      if (event.target.closest("#btnCopyShare")) {
+        copyShareLink();
+        return;
+      }
+
+      if (event.target.closest("#btnSaveFbConfig")) {
+        saveFbConfigFromInput();
+        return;
+      }
+
+      if (event.target.closest("#btnResetFbConfig")) {
+        resetFbConfig();
+        return;
+      }
+
       /* Cerrar modales */
       const closeEl = event.target.closest("[data-close]");
       if (closeEl) {
@@ -2224,7 +2606,34 @@
     if (!state.boards.length) {
       setTimeout(() => openBoardModal("new"), 150);
     }
+
+    /* ¿Se abrió un enlace de tablero compartido? */
+    applyCloudFromUrl();
+    const sharedId = readShareIdFromUrl();
+    if (sharedId) {
+      if (firebaseConfigured()) {
+        const existing = boardForShare(sharedId);
+        if (existing) ui.boardId = existing.id;
+        render();
+        setTimeout(() => {
+          /* No publicamos nuestro tablero local: solo leemos el compartido. */
+          connectSharedBoard(sharedId, { firstConnect: false, silent: true });
+          toast("Conectando con el tablero compartido…");
+        }, 0);
+      } else {
+        setTimeout(() => toast("Este enlace es de un tablero compartido, pero falta configurar la conexión"), 500);
+      }
+    }
   }
+
+  /* Mantener el enlace compartido al cambiar de pestaña/recargar */
+  window.addEventListener("hashchange", () => {
+    applyCloudFromUrl();
+    const sharedId = readShareIdFromUrl();
+    if (sharedId && firebaseConfigured()) {
+      connectSharedBoard(sharedId, { firstConnect: false, silent: true });
+    }
+  });
 
   init();
 })();
