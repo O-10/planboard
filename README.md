@@ -2,6 +2,8 @@
 
 **Desarrollado por Oscar Iván Solarte Cerón** · [315 401 3707](tel:+573154013707)
 
+🔗 **Demo en vivo:** <https://o-10.github.io/planboard/> — **Código:** <https://github.com/O-10/planboard>
+
 Aplicación web inspirada en Trello para planificar actividades. Incluye tableros, listas, tarjetas con
 arrastrar y soltar, estados de avance (**Planificada**, **En proceso**, **Ejecutada**) y etiquetas de
 colores con nombre editable, igual que en Trello.
