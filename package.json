@@ -1,0 +1,9 @@
+{
+  "name": "planboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tableros de actividades estilo Trello con listas, estados y etiquetas de colores",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
