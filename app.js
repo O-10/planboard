@@ -444,14 +444,59 @@
     return !!cloudConfig();
   }
 
+  /* ¿La app se está sirviendo desde el servidor local con SQL Server?
+     Si es así, ese pasa a ser el almacén principal (por encima de Firebase). */
+  async function detectApiBackend() {
+    try {
+      const res = await fetch("/api/info", { cache: "no-store" });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.backend === "sqlserver") return data;
+    } catch (err) { /* sin servidor local: seguimos con Firebase o en local */ }
+    return null;
+  }
+
+  function ensureBackend() {
+    if (!cloud.probe) {
+      cloud.probe = (async () => {
+        const api = await detectApiBackend();
+        if (api) {
+          cloud.mode = "api";
+          cloud.publicUrl = api.publicUrl || "";
+          return "api";
+        }
+        if (firebaseConfigured()) {
+          cloud.mode = "firebase";
+          return "firebase";
+        }
+        cloud.mode = null;
+        return null;
+      })();
+    }
+    return cloud.probe;
+  }
+
+  async function refreshPublicUrl() {
+    if (cloud.mode !== "api") return;
+    try {
+      const res = await fetch("/api/info", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.publicUrl) cloud.publicUrl = data.publicUrl;
+      }
+    } catch (err) { /* ignore */ }
+  }
+
   function resetCloudState() {
     if (cloud.ref) {
       try { cloud.ref.off(); } catch (err) { /* ignore */ }
     }
+    stopApiPolling();
     cloud.ready = false;
     cloud.db = null;
     cloud.shareId = null;
     cloud.ref = null;
+    cloud.connecting = null;
   }
 
   function initCloud() {
@@ -488,6 +533,12 @@
   function shareUrlFor(shareId) {
     const params = new URLSearchParams();
     params.set(SHARE_PARAM, shareId);
+    /* Con SQL Server local, el enlace apunta al túnel público (si existe). */
+    if (cloud.mode === "api") {
+      const base = (cloud.publicUrl || location.origin).replace(/\/+$/, "");
+      const pathName = location.pathname && location.pathname !== "/" ? location.pathname : "/";
+      return base + pathName + "#" + params.toString();
+    }
     /* El enlace lleva la conexión para que quien lo abra no configure nada. */
     const cfg = cloudConfig();
     if (cfg && cfg.databaseURL) params.set("c", b64urlEncode(JSON.stringify(cfg)));
@@ -515,25 +566,48 @@
   }
 
   function scheduleCloudPush() {
-    if (!cloud.ready || !cloud.shareId || cloud.applyingRemote) return;
+    if (!cloud.mode || !cloud.shareId || cloud.applyingRemote) return;
     clearTimeout(cloud.pushTimer);
     cloud.pushTimer = setTimeout(pushCloudNow, 500);
   }
 
   function pushCloudNow() {
-    if (!cloud.ready || !cloud.shareId || cloud.applyingRemote) return;
+    if (!cloud.shareId || cloud.applyingRemote) return;
     const board = boardForShare(cloud.shareId) || currentBoard();
     if (!board) return;
     board.shareId = cloud.shareId;
-    const payload = {
-      board: JSON.parse(JSON.stringify(board)),
-      updatedAt: Date.now()
-    };
-    const ref = cloud.ref || cloud.db.ref("boards/" + cloud.shareId);
-    ref.set(payload).catch((err) => {
-      console.warn("No se pudo sincronizar con la nube:", err);
-      toast("No se pudo sincronizar (revisa tu conexión)");
-    });
+    const clone = JSON.parse(JSON.stringify(board));
+    delete clone.seeded;
+
+    if (cloud.mode === "api") {
+      fetch("/api/board/" + encodeURIComponent(cloud.shareId), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board: clone })
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.json();
+        })
+        .then((data) => {
+          /* Recordamos la versión que acabamos de escribir para no volver a
+             traer nuestro propio cambio en el siguiente sondeo. */
+          if (data && data.rev) cloud.pollRev = data.rev;
+        })
+        .catch((err) => {
+          console.warn("No se pudo guardar en SQL Server:", err);
+          toast("No se pudo guardar en tu SQL Server");
+        });
+      return;
+    }
+
+    if (cloud.mode !== "firebase" || !cloud.ref) return;
+    cloud.ref
+      .set({ board: clone, updatedAt: Date.now() })
+      .catch((err) => {
+        console.warn("No se pudo sincronizar con la nube:", err);
+        toast("No se pudo sincronizar (revisa tu conexión)");
+      });
   }
 
   function boardIsEmpty(board) {
@@ -569,15 +643,123 @@
     cloud.applyingRemote = false;
   }
 
+  /* --- Modo SQL Server local: estado inicial + sondeo periódico ---
+     Usamos sondeo en vez de SSE porque los túneles (Cloudflare) almacenan en
+     búfer los eventos y no llegan al instante. Sondeamos una versión ligera y
+     solo traemos el tablero completo cuando cambió. */
+
+  function stopApiPolling() {
+    if (cloud.pollTimer) {
+      clearTimeout(cloud.pollTimer);
+      cloud.pollTimer = null;
+    }
+    cloud.polling = false;
+    cloud.pollRev = null;
+    cloud.pollFails = 0;
+  }
+
+  const API_POLL_MS = 1200;
+
+  function apiPollDelay() {
+    if (cloud.pollFails > 0) {
+      return Math.min(API_POLL_MS * cloud.pollFails * 2, 8000);
+    }
+    return API_POLL_MS;
+  }
+
+  async function apiPollTick() {
+    const shareId = cloud.shareId;
+    if (!shareId || cloud.mode !== "api") return;
+
+    try {
+      const res = await fetch(
+        "/api/board/" + encodeURIComponent(shareId) + "/rev",
+        { cache: "no-store" }
+      );
+      if (res.ok) {
+        cloud.pollFails = 0;
+        const data = await res.json();
+        const rev = data && data.rev ? data.rev : null;
+        if (rev && rev !== cloud.pollRev) {
+          /* Cambió: traemos el tablero completo y lo aplicamos. */
+          const full = await fetch("/api/board/" + encodeURIComponent(shareId), { cache: "no-store" });
+          if (full.ok) {
+            const d = await full.json();
+            if (d && d.rev) cloud.pollRev = d.rev;
+            if (d && d.board) applyRemoteBoard(d.board);
+          }
+        }
+      } else {
+        cloud.pollFails += 1;
+      }
+    } catch (err) {
+      cloud.pollFails += 1;
+    }
+
+    if (cloud.shareId === shareId && cloud.mode === "api") {
+      cloud.pollTimer = setTimeout(apiPollTick, apiPollDelay());
+    }
+  }
+
+  function startApiPolling(shareId, rev) {
+    stopApiPolling();
+    cloud.shareId = shareId;
+    cloud.pollRev = rev || null;
+    cloud.polling = true;
+    cloud.pollTimer = setTimeout(apiPollTick, API_POLL_MS);
+  }
+
+  function connectApiBoard(shareId, o) {
+    const options = o || {};
+    cloud.connecting = shareId;
+    return fetch("/api/board/" + encodeURIComponent(shareId), { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.board) {
+          if (data.rev) cloud.pollRev = data.rev;
+          applyRemoteBoard(data.board);
+          startApiPolling(shareId, data.rev);
+        } else if (options.firstConnect) {
+          /* Todavía no existe en SQL Server: subimos el nuestro. */
+          startApiPolling(shareId, null);
+          pushCloudNow();
+          toast("Tablero compartido creado");
+        } else {
+          /* Aún no existe (p. ej. el dueño no lo ha creado): sondeamos. */
+          startApiPolling(shareId, null);
+        }
+        return true;
+      })
+      .catch(() => {
+        /* Sin conexión puntual con el servidor: seguimos sondeando. */
+        startApiPolling(shareId, null);
+        return true;
+      })
+      .then((result) => {
+        if (cloud.connecting === shareId) cloud.connecting = null;
+        return result;
+      });
+  }
+
   function connectSharedBoard(shareId, opts) {
     const o = opts || {};
+    if (!cloud.mode) {
+      if (!o.silent) toast("La colaboración aún no está configurada");
+      return false;
+    }
+    if (cloud.shareId === shareId && (cloud.ref || cloud.polling || cloud.connecting === shareId)) {
+      return true;
+    }
+    if (cloud.ref) { try { cloud.ref.off(); } catch (err) { /* ignore */ } cloud.ref = null; }
+    stopApiPolling();
+    cloud.shareId = shareId;
+
+    if (cloud.mode === "api") return connectApiBoard(shareId, o);
+
     if (!initCloud()) {
       if (!o.silent) toast("La colaboración aún no está configurada");
       return false;
     }
-    if (cloud.shareId === shareId && cloud.ref) return true;
-    if (cloud.ref) cloud.ref.off();
-    cloud.shareId = shareId;
     cloud.ref = cloud.db.ref("boards/" + shareId);
     cloud.ref.on(
       "value",
@@ -601,20 +783,42 @@
     return true;
   }
 
-  function shareBoard() {
+  function ensureBoardShareId(board) {
+    if (!board) return null;
+    if (!board.shareId) {
+      board.shareId = randomShareId();
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (err) { /* ignore */ }
+    }
+    return board.shareId;
+  }
+
+  /* En modo SQL Server, el tablero activo se sincroniza solo (sin pulsar Compartir). */
+  function syncActiveBoard() {
+    if (cloud.mode !== "api") return;
+    /* Si estamos viendo un enlace compartido, manda ese tablero. */
+    if (readShareIdFromUrl()) return;
+    const board = currentBoard();
+    if (!board) return;
+    const shareId = ensureBoardShareId(board);
+    connectSharedBoard(shareId, { firstConnect: true, silent: true });
+  }
+
+  async function shareBoard() {
     const board = currentBoard();
     if (!board) {
       toast("Crea un tablero primero");
       return;
     }
-    if (!firebaseConfigured()) {
+    await ensureBackend();
+    if (!cloud.mode) {
       renderShareBody(null);
       showModal("shareModal");
       return;
     }
+    if (cloud.mode === "api") await refreshPublicUrl();
     if (!board.shareId) board.shareId = randomShareId();
     saveState();
-    const first = !cloud.ready || cloud.shareId !== board.shareId;
+    const first = cloud.shareId !== board.shareId;
     connectSharedBoard(board.shareId, { firstConnect: first });
     renderShareBody(board.shareId);
     showModal("shareModal");
@@ -655,6 +859,35 @@
   function renderShareBody(shareId) {
     const body = $("#shareBody");
     if (!body) return;
+
+    /* --- Modo SQL Server local (tu computador) --- */
+    if (cloud.mode === "api") {
+      const url = shareUrlFor(shareId);
+      const isRemote =
+        /^https?:\/\//i.test(cloud.publicUrl) &&
+        !/localhost|127\.0\.0\.1/i.test(cloud.publicUrl);
+      body.innerHTML =
+        '<p class="share-ok">Guardando en <strong>tu SQL Server local</strong>. ' +
+        "Los datos quedan en tu computador.</p>" +
+        '<label class="field"><span>Enlace para compartir</span>' +
+          '<div class="share-row">' +
+            '<input id="shareLink" class="input" type="text" readonly value="' + url + '">' +
+            '<button class="btn-primary" id="btnCopyShare" type="button">Copiar</button>' +
+          "</div>" +
+        "</label>" +
+        (isRemote
+          ? '<p class="share-note">Envía este enlace a tu compañero: podrá <strong>ver y editar</strong> el ' +
+            "tablero en tiempo real. Funciona mientras <strong>tu computador esté encendido</strong> y con el " +
+            "servidor y el túnel abiertos.</p>"
+          : '<p class="share-warn">Ahora mismo el enlace apunta a tu equipo local, así que solo sirve en tu ' +
+            "computador. Para que tu compañero entre desde otra parte, inicia el <strong>túnel</strong> " +
+            "(mira el README), reinicia el servidor y vuelve a abrir este panel.</p>") +
+        '<div class="modal-actions">' +
+          '<button class="btn-ghost" id="btnReconnect" type="button">Actualizar enlace</button>' +
+          '<button class="btn-ghost" data-close="shareModal" type="button">Cerrar</button>' +
+        "</div>";
+      return;
+    }
 
     if (!firebaseConfigured()) {
       body.innerHTML =
@@ -767,7 +1000,16 @@
     shareId: null,
     ref: null,
     applyingRemote: false,
-    pushTimer: null
+    pushTimer: null,
+    mode: null,        /* "api" (SQL Server local) o "firebase" (nube) */
+    publicUrl: "",     /* URL pública del túnel, si la hay */
+    connecting: null,
+    probe: null,
+    /* Modo SQL Server: sondeo periódico (más fiable que SSE tras un túnel). */
+    pollTimer: null,
+    pollRev: null,     /* última versión conocida del tablero */
+    pollFails: 0,
+    polling: false
   };
 
   /* ---------- Selectores ---------- */
@@ -856,6 +1098,7 @@
     renderBoard();
     updateLegend();
     updateFilterButton();
+    syncActiveBoard();
   }
 
   function updateLegend() {
@@ -2296,6 +2539,11 @@
         return;
       }
 
+      if (event.target.closest("#btnReconnect")) {
+        refreshPublicUrl().then(() => renderShareBody(cloud.shareId));
+        return;
+      }
+
       /* Cerrar modales */
       const closeEl = event.target.closest("[data-close]");
       if (closeEl) {
@@ -2621,28 +2869,37 @@
 
     /* ¿Se abrió un enlace de tablero compartido? */
     applyCloudFromUrl();
+    bootShare();
+  }
+
+  async function bootShare() {
     const sharedId = readShareIdFromUrl();
-    if (sharedId) {
-      if (firebaseConfigured()) {
-        const existing = boardForShare(sharedId);
-        if (existing) ui.boardId = existing.id;
-        render();
-        setTimeout(() => {
-          /* No publicamos nuestro tablero local: solo leemos el compartido. */
-          connectSharedBoard(sharedId, { firstConnect: false, silent: true });
-          toast("Conectando con el tablero compartido…");
-        }, 0);
-      } else {
-        setTimeout(() => toast("Este enlace es de un tablero compartido, pero falta configurar la conexión"), 500);
-      }
+    await ensureBackend();
+    if (!sharedId) {
+      /* En modo SQL Server el tablero activo se sincroniza solo. */
+      syncActiveBoard();
+      return;
     }
+    if (!cloud.mode) {
+      setTimeout(() => {
+        toast("Este enlace es de un tablero compartido, pero falta configurar la conexión");
+      }, 500);
+      return;
+    }
+    const existing = boardForShare(sharedId);
+    if (existing) ui.boardId = existing.id;
+    render();
+    /* No publicamos nuestro tablero local: solo leemos el compartido. */
+    connectSharedBoard(sharedId, { firstConnect: false, silent: true });
+    toast("Conectando con el tablero compartido…");
   }
 
   /* Mantener el enlace compartido al cambiar de pestaña/recargar */
-  window.addEventListener("hashchange", () => {
+  window.addEventListener("hashchange", async () => {
     applyCloudFromUrl();
     const sharedId = readShareIdFromUrl();
-    if (sharedId && firebaseConfigured()) {
+    await ensureBackend();
+    if (sharedId && cloud.mode) {
       connectSharedBoard(sharedId, { firstConnect: false, silent: true });
     }
   });

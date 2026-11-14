@@ -27,6 +27,16 @@ local en archivos `file://`. Para que la persistencia funcione siempre, usa el s
 > Si ves una versión antigua de la app, fuerza una recarga completa con `Ctrl + F5` (Windows/Linux) o
 > `Cmd + Shift + R` (Mac). El servidor ya envía los archivos sin caché para evitarlo.
 
+### Dos formas de guardar y compartir
+
+| | Qué usa | Cuándo usarla |
+| --- | --- | --- |
+| **Nube (Firebase)** | Una base gratuita de Firebase | Quieres que funcione **aunque tu PC esté apagada** |
+| **Tu SQL Server** | Tu SQL Server local + túnel de Cloudflare | Quieres que los datos queden **en tu computador** |
+
+La app **detecta sola** cuál usar: si la abres servida por `local-server` (tu SQL Server), usa SQL Server;
+si la abres desde GitHub Pages o `server.js`, usa Firebase (o solo el navegador si no configuras nada).
+
 ## Funcionalidades
 
 - **Varios tableros** con fondo degradado, destacado con estrella, creación desde plantilla y opciones
@@ -99,6 +109,50 @@ real. Se configura **una sola vez** con una base de datos gratuita de Firebase (
 
 Sin configurar Firebase, la app funciona igual pero guarda todo **solo en el navegador de cada persona**.
 
+## Guardar en tu propio SQL Server (base principal, con túnel)
+
+En este modo la app se sirve desde **tu computador** y guarda los tableros en **tu SQL Server**, sin
+depender de la nube. Quien tenga el enlace entra por un **túnel de Cloudflare**, así que funciona aunque
+tu compañero esté en otra parte de la ciudad.
+
+**Requisitos:** SQL Server instalado y su servicio iniciado, Node.js y conexión a internet.
+
+1. Abre una terminal en la carpeta del servidor:
+
+   ```bash
+   cd tablero-actividades/local-server
+   npm install
+   ```
+
+2. Arranca todo con un solo paso:
+
+   - **Doble clic en `start-planboard.bat`**, o
+   - desde la terminal: `powershell -ExecutionPolicy Bypass -File start-planboard.ps1`
+
+   El script, la primera vez, descarga `cloudflared.exe`, abre el túnel, muestra una **URL pública**
+   (algo como `https://algo.trycloudflare.com`) y arranca el servidor en <http://localhost:8090>.
+
+3. Abre <http://localhost:8090>, pulsa **Compartir** y copia el enlace que aparece. Envíalo a tu
+   compañero: verá y editará el tablero **en tiempo real**, igual que con Firebase.
+
+Si solo quieres probarlo en tu equipo (sin túnel), ejecuta `npm start` dentro de `local-server`, o usa
+el script con la opción `-NoTunnel`.
+
+**La base de datos** se crea sola al arrancar. Si prefieres crearla a mano:
+
+```bash
+cd local-server
+sqlcmd -S localhost -E -C -i schema.sql
+```
+
+Guarda cada tablero en la tabla `Planboard.dbo.Boards` (`ShareId`, `Payload`, `UpdatedAt`), que puedes
+consultar con SQL Server Management Studio.
+
+> **Importante:** en este modo, tu computador debe estar **encendido y con la ventana abierta** para que
+> tu compañero pueda entrar. El enlace gratuito de Cloudflare **cambia cada vez que reinicias**; si
+> quieres un enlace fijo necesitas un dominio propio (túnel con nombre de Cloudflare). Y como en
+> Firebase, **cualquiera que tenga el enlace puede editar** el tablero: compártelo solo con quien deba.
+
 ## Atajos
 
 - `Esc`: cierra el modal, el menú o el panel de filtros abierto.
@@ -113,15 +167,20 @@ Sin configurar Firebase, la app funciona igual pero guarda todo **solo en el nav
 | --- | --- |
 | `index.html` | Estructura de la interfaz y modales |
 | `styles.css` | Estilos, fondos, tarjetas, modales y responsive |
-| `app.js` | Estado, persistencia, render, filtros y arrastrar/soltar |
-| `server.js` | Servidor local mínimo sin dependencias |
+| `app.js` | Estado, persistencia, render, filtros, arrastrar/soltar y colaboración |
+| `server.js` | Servidor local mínimo sin dependencias (solo estático) |
+| `local-server/planboard-server.js` | Servidor con SQL Server (API + sincronización automática) |
+| `local-server/schema.sql` | Creación de la base de datos y la tabla `Boards` |
+| `local-server/start-planboard.bat` | Arranca el servidor + túnel de Cloudflare con doble clic |
+| `local-server/start-planboard.ps1` | Script que descarga `cloudflared`, abre el túnel y arranca el servidor |
 
 ## Datos y respaldo
 
 Por defecto todo se guarda en el navegador (`localStorage`). Si activas la **colaboración** (ver arriba),
-el tablero compartido se sincroniza además con tu base de datos de Firebase. Usa **Exportar** en la barra
-lateral para descargar un `.json` con todos los tableros y **Importar** para restaurarlo. **Reiniciar**
-deja el tablero de nuevo en blanco con sus secciones vacías.
+el tablero compartido se sincroniza además con tu base de datos de Firebase. Y si usas el **servidor con
+SQL Server**, el tablero activo se guarda directamente en tu SQL Server (tabla `Planboard.dbo.Boards`).
+Usa **Exportar** en la barra lateral para descargar un `.json` con todos los tableros y **Importar** para
+restaurarlo. **Reiniciar** deja el tablero de nuevo en blanco con sus secciones vacías.
 
 Los cambios se guardan **automáticamente** al escribirlos (no hay botón "Guardar"). Si el navegador
 bloquea el almacenamiento (modo privado, cookies bloqueadas o cuota llena), la app te avisa con un

@@ -1,0 +1,15 @@
+{
+  "name": "planboard-local-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor local de Planboard con almacenamiento en SQL Server",
+  "main": "planboard-server.js",
+  "scripts": {
+    "start": "node planboard-server.js",
+    "tunnel": "cloudflared.exe tunnel --url http://localhost:8090",
+    "setup-tunnel": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile 'cloudflared.exe'\""
+  },
+  "dependencies": {
+    "msnodesqlv8": "^6.2.2"
+  }
+}

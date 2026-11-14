@@ -1,6 +1,10 @@
 # Dependencias
 node_modules/
 
+# Binario del túnel (se descarga solo; no se versiona)
+local-server/cloudflared.exe
+cloudflared.exe
+
 # Registros y temporales
 *.log
 npm-debug.log*
