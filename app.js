@@ -536,18 +536,29 @@
     });
   }
 
+  function boardIsEmpty(board) {
+    if (!board || !Array.isArray(board.lists)) return true;
+    return board.lists.every((l) => !Array.isArray(l.cards) || l.cards.length === 0);
+  }
+
   function applyRemoteBoard(remoteBoard) {
     const normalized = normalizeState({ boards: [remoteBoard] });
     if (!normalized || !normalized.boards.length) return;
     const board = normalized.boards[0];
     board.shareId = cloud.shareId;
+    delete board.seeded;
 
     cloud.applyingRemote = true;
     const index = state.boards.findIndex(
       (b) => b.shareId === cloud.shareId || b.id === board.id
     );
-    if (index >= 0) state.boards[index] = board;
-    else state.boards.push(board);
+    if (index >= 0) {
+      state.boards[index] = board;
+    } else {
+      /* Quitamos el tablero inicial vacío para no duplicarlo al abrir un enlace. */
+      state.boards = state.boards.filter((b) => !(b.seeded && boardIsEmpty(b)));
+      state.boards.push(board);
+    }
     ui.boardId = board.id;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -706,6 +717,7 @@
       name: "Plan de actividades",
       bg: "azul",
       starred: true,
+      seeded: true,
       labels: makeLabels(),
       lists: [
         { id: uid("l"), name: "Ideas y pendientes", cards: [] },
