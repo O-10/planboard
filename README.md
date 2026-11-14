@@ -32,7 +32,7 @@ local en archivos `file://`. Para que la persistencia funcione siempre, usa el s
 | | Qué usa | Cuándo usarla |
 | --- | --- | --- |
 | **Nube (Firebase)** | Una base gratuita de Firebase | Quieres que funcione **aunque tu PC esté apagada** |
-| **Tu SQL Server** | Tu SQL Server local + túnel de Cloudflare | Quieres que los datos queden **en tu computador** |
+| **Tu SQL Server** | Tu SQL Server local + enlace público fijo (Tailscale Funnel) | Quieres que los datos queden **en tu computador** |
 
 La app **detecta sola** cuál usar: si la abres servida por `local-server` (tu SQL Server), usa SQL Server;
 si la abres desde GitHub Pages o `server.js`, usa Firebase (o solo el navegador si no configuras nada).
@@ -109,34 +109,63 @@ real. Se configura **una sola vez** con una base de datos gratuita de Firebase (
 
 Sin configurar Firebase, la app funciona igual pero guarda todo **solo en el navegador de cada persona**.
 
-## Guardar en tu propio SQL Server (base principal, con túnel)
+## Guardar en tu propio SQL Server (base principal, con enlace fijo)
 
 En este modo la app se sirve desde **tu computador** y guarda los tableros en **tu SQL Server**, sin
-depender de la nube. Quien tenga el enlace entra por un **túnel de Cloudflare**, así que funciona aunque
-tu compañero esté en otra parte de la ciudad.
+depender de la nube. Publicas tu servidor con **Tailscale Funnel**, que da un **enlace fijo** (no cambia
+nunca), así que quien lo tenga entra desde cualquier parte de la ciudad y siempre por la misma dirección.
 
-**Requisitos:** SQL Server instalado y su servicio iniciado, Node.js y conexión a internet.
+**Requisitos:** SQL Server instalado y su servicio iniciado, Node.js, conexión a internet y una cuenta
+gratuita de Tailscale.
 
-1. Abre una terminal en la carpeta del servidor:
+### Preparación (una sola vez)
+
+1. Abre una terminal en la carpeta del servidor e instala lo necesario:
 
    ```bash
    cd tablero-actividades/local-server
    npm install
    ```
 
-2. Arranca todo con un solo paso:
+2. Instala Tailscale (si no lo tienes) y conéctate:
 
-   - **Doble clic en `start-planboard.bat`**, o
-   - desde la terminal: `powershell -ExecutionPolicy Bypass -File start-planboard.ps1`
+   ```powershell
+   winget install --id Tailscale.Tailscale
+   & "C:\Program Files\Tailscale\tailscale.exe" up
+   ```
 
-   El script, la primera vez, descarga `cloudflared.exe`, abre el túnel, muestra una **URL pública**
-   (algo como `https://algo.trycloudflare.com`) y arranca el servidor en <http://localhost:8090>.
+   Al ejecutar `tailscale up` se abre el navegador para iniciar sesión (vale tu cuenta de Google o
+   Microsoft). Cuando termines, el equipo tendrá un nombre fijo como `mi-pc.tailXXXX.ts.net`.
 
-3. Abre <http://localhost:8090>, pulsa **Compartir** y copia el enlace que aparece. Envíalo a tu
-   compañero: verá y editará el tablero **en tiempo real**, igual que con Firebase.
+3. Habilita Funnel una vez (Tailscale te da un enlace para autorizarlo):
 
-Si solo quieres probarlo en tu equipo (sin túnel), ejecuta `npm start` dentro de `local-server`, o usa
-el script con la opción `-NoTunnel`.
+   ```powershell
+   & "C:\Program Files\Tailscale\tailscale.exe" funnel --bg 8090
+   ```
+
+   Ese comando publica tu servidor en `https://<tu-equipo>.<tu-tailnet>.ts.net` y **deja Funnel activo
+   en segundo plano**, por lo que seguirá funcionando tras reiniciar el equipo.
+
+### Uso diario
+
+- **Doble clic en `start-planboard.bat`** (o `powershell -ExecutionPolicy Bypass -File start-planboard.ps1`).
+  El script vuelve a activar Funnel (por si acaso), arranca el servidor y te muestra el **enlace fijo**.
+- Abre <http://localhost:8090>, pulsa **Compartir** y copia el enlace: ya viene con tu URL de Funnel.
+- Envíaselo a tu compañero: verá y editará el tablero **en tiempo real**, igual que con Firebase.
+
+Ese enlace **es siempre el mismo**, así que puedes guardarlo, pegarlo en un chat o dejarlo en un acceso
+directo: no tienes que volver a enviarlo cada vez que reinicias.
+
+### Opciones del script
+
+| Opción | Qué hace |
+| --- | --- |
+| *(sin opciones)* | Activa Tailscale Funnel y arranca el servidor (recomendado). |
+| `-NoPublic` | Solo red local, sin publicar en internet. |
+| `-Quick` | Usa el túnel rápido de Cloudflare en vez de Tailscale (URL que **cambia** al reiniciar). Útil si no quieres instalar Tailscale. |
+| `-Unpublish` | Desactiva Funnel (el enlace deja de publicarse) y sale. |
+
+Si solo quieres probarlo en tu equipo (sin publicar), ejecuta `npm start` dentro de `local-server`.
 
 **La base de datos** se crea sola al arrancar. Si prefieres crearla a mano:
 
@@ -149,9 +178,9 @@ Guarda cada tablero en la tabla `Planboard.dbo.Boards` (`ShareId`, `Payload`, `U
 consultar con SQL Server Management Studio.
 
 > **Importante:** en este modo, tu computador debe estar **encendido y con la ventana abierta** para que
-> tu compañero pueda entrar. El enlace gratuito de Cloudflare **cambia cada vez que reinicias**; si
-> quieres un enlace fijo necesitas un dominio propio (túnel con nombre de Cloudflare). Y como en
-> Firebase, **cualquiera que tenga el enlace puede editar** el tablero: compártelo solo con quien deba.
+> tu compañero pueda entrar. Funnel te da un enlace **fijo y gratuito** sin necesidad de dominio propio.
+> Y como en Firebase, **cualquiera que tenga el enlace puede editar** el tablero: compártelo solo con
+> quien deba. Para dejar de publicarlo, ejecuta el script con `-Unpublish`.
 
 ## Atajos
 
@@ -171,8 +200,8 @@ consultar con SQL Server Management Studio.
 | `server.js` | Servidor local mínimo sin dependencias (solo estático) |
 | `local-server/planboard-server.js` | Servidor con SQL Server (API + sincronización automática) |
 | `local-server/schema.sql` | Creación de la base de datos y la tabla `Boards` |
-| `local-server/start-planboard.bat` | Arranca el servidor + túnel de Cloudflare con doble clic |
-| `local-server/start-planboard.ps1` | Script que descarga `cloudflared`, abre el túnel y arranca el servidor |
+| `local-server/start-planboard.bat` | Arranca el servidor + enlace público (Tailscale Funnel) con doble clic |
+| `local-server/start-planboard.ps1` | Script que activa Funnel y arranca el servidor (respaldo: túnel rápido de Cloudflare con `-Quick`) |
 
 ## Datos y respaldo
 

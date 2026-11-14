@@ -1,22 +1,30 @@
 # ============================================================
-#  Planboard · Arranque con SQL Server + túnel de Cloudflare
+#  Planboard · Arranque con SQL Server + Tailscale Funnel
 # ------------------------------------------------------------
-#  Abre un túnel público y luego el servidor local, para que tu
-#  compañero pueda ver y editar el tablero desde otra parte.
+#  Publica tu servidor local en internet con un ENLACE FIJO
+#  (no cambia nunca) usando Tailscale Funnel, y luego arranca
+#  el servidor, para que tu compañero pueda ver y editar el
+#  tablero desde otra parte.
 #
-#  Uso:  doble clic en start-planboard.bat
-#        (o)  powershell -ExecutionPolicy Bypass -File start-planboard.ps1
+#  Uso:
+#    doble clic en start-planboard.bat
+#    (o)  powershell -ExecutionPolicy Bypass -File start-planboard.ps1
+#
+#  Opciones:
+#    -NoPublic   No publica en internet (solo red local).
+#    -Quick      Usa el tunel rapido de Cloudflare en vez de Tailscale
+#                (util si no quieres/puedes instalar Tailscale).
+#    -Unpublish  Desactiva Funnel y sale.
 #
 #  Deja esta ventana abierta mientras trabajas. Con Ctrl+C se
-#  detienen el servidor y el túnel.
-#
-#  Nota: el enlace gratuito de Cloudflare cambia cada vez que
-#  reinicias. Si quieres un enlace fijo necesitas un dominio
-#  propio (mira el README).
+#  detiene el servidor. El enlace de Tailscale NO cambia: la
+#  proxima vez que arranques seguira siendo el mismo.
 # ============================================================
 
 param(
-  [switch]$NoTunnel
+  [switch]$NoPublic,
+  [switch]$Quick,
+  [switch]$Unpublish
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,73 +32,93 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
 
 $port = if ($env:PORT) { $env:PORT } else { "8090" }
+$tsExe = "C:\Program Files\Tailscale\tailscale.exe"
 $cloudflared = Join-Path $here "cloudflared.exe"
-$log = Join-Path $env:TEMP "planboard-cloudflared.log"
+$cfLog = Join-Path $env:TEMP "planboard-cloudflared.log"
 $tunnel = $null
+$publicUrl = $null
 
-function Descargar-Cloudflared {
-  $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-  Write-Host "      Descargando cloudflared (una sola vez)..." -ForegroundColor Yellow
-  $ProgressPreference = "SilentlyContinue"
+function Get-TailscaleDns {
+  if (-not (Test-Path $tsExe)) { return $null }
   try {
-    Invoke-WebRequest -Uri $url -OutFile $cloudflared -TimeoutSec 300
-    Write-Host "      Descarga completada." -ForegroundColor Green
-    return $true
-  } catch {
-    Write-Host "      No se pudo descargar: $($_.Exception.Message)" -ForegroundColor Red
-    return $false
+    $raw = & $tsExe status --json 2>$null
+    if (-not $raw) { return $null }
+    $json = $raw | ConvertFrom-Json
+    if ($json.BackendState -ne "Running") { return $null }
+    if ($json.Self -and $json.Self.DNSName) { return $json.Self.DNSName.TrimEnd(".") }
+  } catch { }
+  return $null
+}
+
+function Enable-QuickTunnel {
+  if (-not (Test-Path $cloudflared)) {
+    Write-Host "      Descargando cloudflared (una sola vez)..." -ForegroundColor Yellow
+    $ProgressPreference = "SilentlyContinue"
+    try {
+      Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cloudflared -TimeoutSec 300
+    } catch {
+      Write-Host "      No se pudo descargar cloudflared: $($_.Exception.Message)" -ForegroundColor Red
+      return $null
+    }
   }
+  if (Test-Path $cfLog) { Remove-Item $cfLog -Force -ErrorAction SilentlyContinue }
+  $script:tunnel = Start-Process -FilePath $cloudflared `
+    -ArgumentList @("tunnel", "--url", "http://localhost:$port", "--no-autoupdate", "--logfile", $cfLog) `
+    -PassThru -WindowStyle Hidden
+  for ($i = 0; $i -lt 45; $i++) {
+    Start-Sleep -Seconds 1
+    if (Test-Path $cfLog) {
+      $m = Select-String -Path $cfLog -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -AllMatches
+      if ($m) { return $m.Matches[0].Value }
+    }
+    if ($script:tunnel.HasExited) { break }
+  }
+  return $null
 }
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host " Planboard · SQL Server + tunel de Cloudflare" -ForegroundColor Cyan
+Write-Host " Planboard · SQL Server + enlace publico" -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- 1) Túnel público ---
-if (-not $NoTunnel) {
-  if (-not (Test-Path $cloudflared)) {
-    if (-not (Descargar-Cloudflared)) {
-      Write-Host "      Se continuara solo en la red local." -ForegroundColor Red
-    }
-  }
+if ($Unpublish) {
+  if (Test-Path $tsExe) { & $tsExe funnel --https=443 off 2>$null | Out-Null }
+  Write-Host "Funnel desactivado. El enlace dejo de publicarse." -ForegroundColor Yellow
+  return
+}
 
-  if (Test-Path $cloudflared) {
-    if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
-    Write-Host "[1/2] Abriendo tunel publico..." -ForegroundColor Yellow
-    $tunnel = Start-Process -FilePath $cloudflared `
-      -ArgumentList @("tunnel", "--url", "http://localhost:$port", "--no-autoupdate", "--logfile", $log) `
-      -PassThru -WindowStyle Hidden
-
-    $publicUrl = $null
-    for ($i = 0; $i -lt 45; $i++) {
-      Start-Sleep -Seconds 1
-      if (Test-Path $log) {
-        $m = Select-String -Path $log -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -AllMatches
-        if ($m) { $publicUrl = $m.Matches[0].Value; break }
-      }
-      if ($tunnel.HasExited) { break }
-    }
-
-    if ($publicUrl) {
-      $env:PUBLIC_URL = $publicUrl
-      Write-Host "      URL publica: $publicUrl" -ForegroundColor Green
-    } else {
-      Write-Host "      No se pudo obtener la URL publica del tunel." -ForegroundColor Red
-      Write-Host "      Se continuara solo en la red local." -ForegroundColor Red
-    }
+# --- 1) Publicacion ---
+if ($NoPublic) {
+  Write-Host "[1/2] Publicacion omitida (-NoPublic)." -ForegroundColor DarkGray
+} elseif ($Quick -or -not (Test-Path $tsExe)) {
+  Write-Host "[1/2] Abriendo tunel rapido de Cloudflare..." -ForegroundColor Yellow
+  $publicUrl = Enable-QuickTunnel
+  if ($publicUrl) {
+    Write-Host "      URL (cambia al reiniciar): $publicUrl" -ForegroundColor Green
+  } else {
+    Write-Host "      No se pudo abrir el tunel. Se continua solo en local." -ForegroundColor Red
   }
 } else {
-  Write-Host "[1/2] Tunel omitido (-NoTunnel)." -ForegroundColor DarkGray
+  Write-Host "[1/2] Activando Tailscale Funnel (enlace fijo)..." -ForegroundColor Yellow
+  $dns = Get-TailscaleDns
+  if (-not $dns) {
+    Write-Host "      Tailscale no esta conectado. Inicia sesion con:" -ForegroundColor Yellow
+    Write-Host "        & `"$tsExe`" up" -ForegroundColor Gray
+    Write-Host "      (Si Funnel no esta habilitado, Tailscale te dara un enlace para activarlo.)" -ForegroundColor Gray
+  } else {
+    & $tsExe funnel --bg $port 2>&1 | Out-Null
+    $publicUrl = "https://$dns"
+    Write-Host "      URL fija: $publicUrl" -ForegroundColor Green
+  }
 }
+
+if ($publicUrl) { $env:PUBLIC_URL = $publicUrl }
 
 # --- 2) Servidor ---
 Write-Host "[2/2] Iniciando servidor..." -ForegroundColor Yellow
 Write-Host "      Local:    http://localhost:$port" -ForegroundColor Gray
-if ($env:PUBLIC_URL) {
-  Write-Host "      Compartir: $($env:PUBLIC_URL)" -ForegroundColor Gray
-}
+if ($publicUrl) { Write-Host "      Compartir: $publicUrl" -ForegroundColor Gray }
 Write-Host ""
 Write-Host "Deja esta ventana abierta. Pulsa Ctrl+C para detener." -ForegroundColor DarkGray
 Write-Host ""
