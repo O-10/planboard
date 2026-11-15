@@ -32,6 +32,20 @@ const CONN_STR =
     DB_NAME +
     ";Trusted_Connection=Yes;TrustServerCertificate=Yes;";
 
+/* URL pública para el enlace de compartir. Si el script nos pasó PUBLIC_URL
+   la usamos; si no (por ejemplo, el servidor arrancó antes que Tailscale),
+   la deducimos de la propia petición: así quien entra por el Funnel recibe
+   siempre la dirección correcta aunque el arranque fuera en local. */
+function publicUrlFor(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host =
+    (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim() ||
+    "localhost:" + PORT;
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const proto = forwardedProto || (/\.ts\.net(:\d+)?$/i.test(host) ? "https" : "http");
+  return proto + "://" + host;
+}
+
 /* ---------- Base de datos (con cola para no solapar consultas) ---------- */
 
 let conn = null;
@@ -175,7 +189,7 @@ async function handleApi(req, res, url) {
       ok: true,
       backend: "sqlserver",
       db: DB_NAME,
-      publicUrl: PUBLIC_URL || ("http://" + (req.headers.host || "localhost:" + PORT))
+      publicUrl: publicUrlFor(req)
     });
     return true;
   }

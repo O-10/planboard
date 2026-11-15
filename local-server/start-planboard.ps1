@@ -50,6 +50,25 @@ function Get-TailscaleDns {
   return $null
 }
 
+# Tras encender el PC, Tailscale tarda en conectar. Esperamos un poco para que
+# el servidor arranque ya con la URL fija correcta.
+function Wait-TailscaleDns {
+  param([int]$TimeoutSeconds = 120)
+  $start = Get-Date
+  $dots = 0
+  while (((Get-Date) - $start).TotalSeconds -lt $TimeoutSeconds) {
+    $dns = Get-TailscaleDns
+    if ($dns) { return $dns }
+    Start-Sleep -Seconds 2
+    $dots++
+    if ($dots % 5 -eq 0) {
+      $elapsed = [int]((Get-Date) - $start).TotalSeconds
+      Write-Host "      ...esperando a Tailscale (${elapsed}s)" -ForegroundColor DarkGray
+    }
+  }
+  return $null
+}
+
 function Enable-QuickTunnel {
   if (-not (Test-Path $cloudflared)) {
     Write-Host "      Descargando cloudflared (una sola vez)..." -ForegroundColor Yellow
@@ -101,11 +120,12 @@ if ($NoPublic) {
   }
 } else {
   Write-Host "[1/2] Activando Tailscale Funnel (enlace fijo)..." -ForegroundColor Yellow
-  $dns = Get-TailscaleDns
+  $dns = Wait-TailscaleDns
   if (-not $dns) {
     Write-Host "      Tailscale no esta conectado. Inicia sesion con:" -ForegroundColor Yellow
     Write-Host "        & `"$tsExe`" up" -ForegroundColor Gray
     Write-Host "      (Si Funnel no esta habilitado, Tailscale te dara un enlace para activarlo.)" -ForegroundColor Gray
+    Write-Host "      El servidor arrancara igualmente; el enlace publico se activara en cuanto conecte." -ForegroundColor DarkGray
   } else {
     & $tsExe funnel --bg $port 2>&1 | Out-Null
     $publicUrl = "https://$dns"

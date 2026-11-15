@@ -167,6 +167,35 @@ directo: no tienes que volver a enviarlo cada vez que reinicias.
 
 Si solo quieres probarlo en tu equipo (sin publicar), ejecuta `npm start` dentro de `local-server`.
 
+### Arrancar solo al encender el PC (opcional)
+
+Para que el enlace fijo esté disponible **sin abrir nada**, crea una tarea programada de Windows que
+arranque el servidor al iniciar sesión (una sola vez):
+
+```powershell
+$ps      = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$script  = "C:\ruta\a\tablero-actividades\local-server\start-planboard.ps1"
+$workdir = "C:\ruta\a\tablero-actividades\local-server"
+$user    = "$env:USERDOMAIN\$env:USERNAME"
+
+$action    = New-ScheduledTaskAction -Execute $ps `
+  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`"" -WorkingDirectory $workdir
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
+$settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+
+Register-ScheduledTask -TaskName "Planboard Server" -Action $action -Trigger $trigger `
+  -Settings $settings -Principal $principal -Force
+```
+
+El script **espera a que Tailscale conecte** (tarda unos segundos tras encender) antes de arrancar el
+servidor, así el enlace público queda correcto desde el principio. Para quitarla:
+
+```powershell
+Unregister-ScheduledTask -TaskName "Planboard Server" -Confirm:$false
+```
+
 **La base de datos** se crea sola al arrancar. Si prefieres crearla a mano:
 
 ```bash

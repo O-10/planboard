@@ -530,12 +530,26 @@
     return new URLSearchParams(location.hash.replace(/^#/, ""));
   }
 
+  /* ¿La app se está viendo ya por el enlace público (no localhost)? */
+  function viewingFromPublicOrigin() {
+    if (location.protocol === "file:") return false;
+    return !/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
+  }
+
+  /* Base del enlace de compartir en modo SQL Server: si ya estás dentro por el
+     enlace público, se usa tal cual (así funciona aunque el servidor acabe de
+     arrancar y aún no conociera su URL); si no, la que reporta el servidor. */
+  function apiShareBase() {
+    if (viewingFromPublicOrigin()) return location.origin;
+    return cloud.publicUrl || location.origin;
+  }
+
   function shareUrlFor(shareId) {
     const params = new URLSearchParams();
     params.set(SHARE_PARAM, shareId);
     /* Con SQL Server local, el enlace apunta al túnel público (si existe). */
     if (cloud.mode === "api") {
-      const base = (cloud.publicUrl || location.origin).replace(/\/+$/, "");
+      const base = apiShareBase().replace(/\/+$/, "");
       const pathName = location.pathname && location.pathname !== "/" ? location.pathname : "/";
       return base + pathName + "#" + params.toString();
     }
@@ -863,9 +877,10 @@
     /* --- Modo SQL Server local (tu computador) --- */
     if (cloud.mode === "api") {
       const url = shareUrlFor(shareId);
+      const base = apiShareBase();
       const isRemote =
-        /^https?:\/\//i.test(cloud.publicUrl) &&
-        !/localhost|127\.0\.0\.1/i.test(cloud.publicUrl);
+        /^https?:\/\//i.test(base) &&
+        !/localhost|127\.0\.0\.1/i.test(base);
       body.innerHTML =
         '<p class="share-ok">Guardando en <strong>tu SQL Server local</strong>. ' +
         "Los datos quedan en tu computador.</p>" +
